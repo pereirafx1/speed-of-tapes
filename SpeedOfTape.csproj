@@ -67,10 +67,13 @@
   </ItemGroup>
 
   <!-- ================================================================= -->
-  <!--  WPF / Windows color types (System.Windows.Media.Color)           -->
-  <!--  Present in the GAC on any Windows machine with .NET FX 4.8      -->
+  <!--  Framework assemblies not auto-included by the SDK for net48     -->
+  <!--  All are present in the GAC on any Windows machine with .NET FX 4.8 -->
   <!-- ================================================================= -->
   <ItemGroup>
+    <!-- System.ComponentModel.DataAnnotations — [Display], [Range], etc. -->
+    <Reference Include="System.ComponentModel.DataAnnotations" />
+    <!-- WPF color types — System.Windows.Media.Color, Colors -->
     <Reference Include="WindowsBase" />
     <Reference Include="PresentationCore" />
   </ItemGroup>
