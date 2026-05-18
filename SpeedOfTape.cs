@@ -7,18 +7,12 @@
 //   • PURPLE bars — sell aggression dominates (trades filled at the bid)
 //   • Bar height  — magnitude of the net speed difference (contracts / second)
 //
-// Required DLLs (from your ATAS installation directory):
-//   ATAS.Indicators.dll  — base Indicator class, ValueDataSeries, VisualMode, etc.
-//   OFT.Rendering.dll    — CrossColor / rendering types (may be needed depending on version)
-//   PresentationCore.dll — System.Windows.Media.Color  (ships with .NET Framework / WPF)
-//   WindowsBase.dll      — WPF support assembly
-//
-// Build (SDK-style, .NET Framework 4.8):
-//   dotnet build SpeedOfTape.csproj -c Release -p:ATASPath="C:\Program Files\ATAS\bin"
+// Build (run from the directory containing SpeedOfTape.csproj):
+//   dotnet build SpeedOfTape.csproj -c Release
 //
 // Deploy:
-//   Copy SpeedOfTape.dll to  %APPDATA%\ATAS Platform\CustomIndicators\
-//   or the path shown in ATAS → Settings → Indicators folder.
+//   Copy bin\Release\net48\SpeedOfTape.dll to:
+//     %APPDATA%\ATAS Platform\CustomIndicators\
 // =============================================================================
 
 using System;

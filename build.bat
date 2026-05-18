@@ -47,7 +47,7 @@ echo [INFO]  ATAS path : %ATAS_PATH%
 
 REM Verify that the required DLLs are actually there
 set "MISSING=0"
-for %%F in (ATAS.Indicators.dll ATAS.Indicators.Other.dll ATAS.Indicators.Technical.dll ATAS.DataFeedsCore.dll) do (
+for %%F in (ATAS.Indicators.dll ATAS.Indicators.Other.dll ATAS.Indicators.Technical.dll ATAS.DataFeedsCore.dll OFT.Rendering.dll) do (
     if not exist "%ATAS_PATH%\%%F" (
         echo [WARN]  Not found: %ATAS_PATH%\%%F
         set "MISSING=1"
