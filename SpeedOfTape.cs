@@ -1,21 +1,22 @@
 // =============================================================================
-// SpeedOfTape.cs — ATAS Custom Indicator
+// SpeedOfTape.cs — ATAS Custom Indicator  v2.0
 //
-// Measures the velocity of buyer- vs seller-aggressed trades (tape speed)
-// and renders a histogram in a separate panel:
-//   • GREEN bars  — buy aggression dominates (trades filled at the ask)
-//   • PURPLE bars — sell aggression dominates (trades filled at the bid)
-//   • Bar height  — magnitude of the net speed difference (contracts / second)
+// Both buy and sell tape speeds are displayed as POSITIVE histogram bars in
+// the same panel, making buy vs sell directly comparable by height.
 //
-// Build (run from the directory containing SpeedOfTape.csproj):
-//   dotnet build SpeedOfTape.csproj -c Release
+//   Green  bars — buyer-initiated speed (contracts/sec at the ask)
+//   Purple bars — seller-initiated speed (contracts/sec at the bid)
+//   Yellow bars — buy bar that passes the active filter (signal)
+//   Cyan   bars — sell bar that passes the active filter (signal)
+//   Gray line   — rolling average total tape speed (reference)
 //
-// Deploy:
-//   Copy bin\Release\net48\SpeedOfTape.dll to:
-//     %APPDATA%\ATAS Platform\CustomIndicators\
+// Build:   dotnet build SpeedOfTape.csproj -c Release
+// Deploy:  copy bin\Release\net48\SpeedOfTape.dll
+//          → %APPDATA%\ATAS Platform\CustomIndicators\
 // =============================================================================
 
 using System;
+using System.Collections.Generic;
 using System.ComponentModel;
 using System.ComponentModel.DataAnnotations;
 using System.Windows.Media;
@@ -24,201 +25,519 @@ using ATAS.Indicators;
 namespace SpeedOfTapeIndicator
 {
     /// <summary>
-    /// Speed of Tape — ATAS order-flow histogram indicator.
+    /// Speed of Tape v2 — order-flow histogram for ATAS.
     ///
-    /// For each bar the indicator looks back over the last <see cref="Period"/> bars,
-    /// accumulates the buyer-initiated volume (trades at the ask) and the
-    /// seller-initiated volume (trades at the bid), then divides each total by
-    /// the elapsed wall-clock time to produce a per-second rate.
-    ///
-    /// A positive net rate is drawn as a green bar; a negative net rate (sellers
-    /// faster) is drawn as a purple bar below the zero line.
+    /// Renders buyer and seller tape speeds as independent positive histogram bars
+    /// so their magnitudes can be compared directly.  An optional filter system
+    /// (Auto or Custom) highlights bars that represent statistically significant
+    /// or volume/speed-elevated tape activity.
     /// </summary>
     [DisplayName("Speed of Tape")]
-    [Description("Histogram: green = buy tape faster, purple = sell tape faster. Height = contracts/sec delta.")]
+    [Description("Buyer and seller tape speeds shown as positive bars. Filter system highlights significant activity.")]
     [Category("Order Flow")]
     public class SpeedOfTape : Indicator
     {
-        // ------------------------------------------------------------------ //
-        //  Private state                                                       //
-        // ------------------------------------------------------------------ //
+        // ================================================================== //
+        //  Private fields                                                      //
+        // ================================================================== //
 
-        private int    _period    = 10;
-        private Color  _buyColor  = Colors.Green;
-        private Color  _sellColor = Color.FromRgb(128, 0, 128); // purple/violet
+        private int     _period              = 10;
+        private bool    _useAutoFilter       = true;
+        private bool    _useCustomFilters    = false;
+        private decimal _minVolumeMultiplier = 1.5m;
+        private int     _volumeLookbackBars  = 10;
+        private decimal _minSpeedMultiplier  = 1.5m;
+        private int     _speedLookbackBars   = 10;
+        private decimal _deltaThreshold      = 0.6m;
+        private int     _minBarHeight        = 5;
+        private bool    _showOnlyFiltered    = false;
 
-        private readonly ValueDataSeries _buySpeedSeries;
-        private readonly ValueDataSeries _sellSpeedSeries;
+        private Color _buyColor          = Colors.Green;
+        private Color _sellColor         = Color.FromRgb(160, 32, 240);  // purple/violet
+        private Color _filteredBuyColor  = Colors.Yellow;
+        private Color _filteredSellColor = Colors.Cyan;
 
-        // ------------------------------------------------------------------ //
-        //  User-configurable parameters                                        //
-        // ------------------------------------------------------------------ //
+        // Five data series registered with ATAS
+        private readonly ValueDataSeries _buyNormalSeries;
+        private readonly ValueDataSeries _sellNormalSeries;
+        private readonly ValueDataSeries _buyFilteredSeries;
+        private readonly ValueDataSeries _sellFilteredSeries;
+        private readonly ValueDataSeries _avgSpeedSeries;
 
-        /// <summary>
-        /// Number of bars in the rolling lookback window used for speed calculation.
-        /// Smaller values = more reactive; larger values = smoother signal.
-        /// </summary>
-        [Display(Name = "Period",
-                 GroupName = "Settings",
-                 Order = 1,
-                 Description = "Rolling lookback window (bars) for speed calculation.")]
+        // ================================================================== //
+        //  Properties — Settings                                              //
+        // ================================================================== //
+
+        /// <summary>Rolling window size (bars) for the speed calculation.</summary>
+        [Display(Name = "Period", GroupName = "Settings", Order = 10,
+            Description = "Number of bars in the rolling window used to compute tape speed.")]
         [Range(1, 500)]
         public int Period
         {
             get => _period;
             set
             {
-                if (value < 1)
-                    return;
+                if (value < 1) return;
                 _period = value;
                 RecalculateValues();
             }
         }
 
-        /// <summary>
-        /// Histogram bar colour when buyer-initiated volume rate exceeds seller rate.
-        /// </summary>
-        [Display(Name = "Buy Color",
-                 GroupName = "Visual",
-                 Order = 2,
-                 Description = "Bar colour when buyers dominate the tape.")]
+        // ================================================================== //
+        //  Properties — Colors                                                //
+        // ================================================================== //
+
+        /// <summary>Colour for buyer-speed bars that have not triggered a filter signal.</summary>
+        [Display(Name = "Buy Color", GroupName = "Colors", Order = 20)]
         public Color BuyColor
         {
             get => _buyColor;
-            set
-            {
-                _buyColor = value;
-                _buySpeedSeries.Color = value;
-                RecalculateValues();
-            }
+            set { _buyColor = value; _buyNormalSeries.Color = value; RecalculateValues(); }
         }
 
-        /// <summary>
-        /// Histogram bar colour when seller-initiated volume rate exceeds buyer rate.
-        /// </summary>
-        [Display(Name = "Sell Color",
-                 GroupName = "Visual",
-                 Order = 3,
-                 Description = "Bar colour when sellers dominate the tape.")]
+        /// <summary>Colour for seller-speed bars that have not triggered a filter signal.</summary>
+        [Display(Name = "Sell Color", GroupName = "Colors", Order = 21)]
         public Color SellColor
         {
             get => _sellColor;
-            set
-            {
-                _sellColor = value;
-                _sellSpeedSeries.Color = value;
-                RecalculateValues();
-            }
+            set { _sellColor = value; _sellNormalSeries.Color = value; RecalculateValues(); }
         }
 
-        // ------------------------------------------------------------------ //
-        //  Constructor                                                         //
-        // ------------------------------------------------------------------ //
+        /// <summary>Colour for a buy bar that passes the active filter (signal bar).</summary>
+        [Display(Name = "Filtered Buy Color", GroupName = "Colors", Order = 22,
+            Description = "Buy bar colour when the bar passes the active filter.")]
+        public Color FilteredBuyColor
+        {
+            get => _filteredBuyColor;
+            set { _filteredBuyColor = value; _buyFilteredSeries.Color = value; RecalculateValues(); }
+        }
+
+        /// <summary>Colour for a sell bar that passes the active filter (signal bar).</summary>
+        [Display(Name = "Filtered Sell Color", GroupName = "Colors", Order = 23,
+            Description = "Sell bar colour when the bar passes the active filter.")]
+        public Color FilteredSellColor
+        {
+            get => _filteredSellColor;
+            set { _filteredSellColor = value; _sellFilteredSeries.Color = value; RecalculateValues(); }
+        }
+
+        // ================================================================== //
+        //  Properties — Filter Toggles                                        //
+        // ================================================================== //
 
         /// <summary>
-        /// Initialises the indicator and registers the two histogram data series
-        /// (buy-speed and sell-speed) in a dedicated chart panel.
+        /// Automatically highlights bars whose speed exceeds mean + 1.5 × std dev
+        /// over the last 50 bars.  Takes priority over Custom Filters when both are on.
+        /// </summary>
+        [Display(Name = "Use Auto Filter", GroupName = "Filters", Order = 30,
+            Description = "Highlights bars > 1.5 std dev above the 50-bar mean speed. Overrides custom filters.")]
+        public bool UseAutoFilter
+        {
+            get => _useAutoFilter;
+            set { _useAutoFilter = value; RecalculateValues(); }
+        }
+
+        /// <summary>
+        /// Activates the manual volume-and-speed multiplier filters defined below.
+        /// Ignored when <see cref="UseAutoFilter"/> is also enabled.
+        /// </summary>
+        [Display(Name = "Use Custom Filters", GroupName = "Filters", Order = 31,
+            Description = "Enable volume and speed multiplier thresholds. Ignored when Auto Filter is on.")]
+        public bool UseCustomFilters
+        {
+            get => _useCustomFilters;
+            set { _useCustomFilters = value; RecalculateValues(); }
+        }
+
+        // ================================================================== //
+        //  Properties — Volume Filter                                         //
+        // ================================================================== //
+
+        /// <summary>
+        /// Current bar's total volume must be at least this multiple of the
+        /// lookback average for the volume condition to pass.
+        /// </summary>
+        [Display(Name = "Min Volume Multiplier", GroupName = "Volume Filter", Order = 40,
+            Description = "Bar volume must be ≥ this × average volume of the last N bars.")]
+        [Range(0.1, 20.0)]
+        public decimal MinVolumeMultiplier
+        {
+            get => _minVolumeMultiplier;
+            set { _minVolumeMultiplier = value; RecalculateValues(); }
+        }
+
+        /// <summary>Number of prior bars used to build the reference average volume.</summary>
+        [Display(Name = "Volume Lookback Bars", GroupName = "Volume Filter", Order = 41,
+            Description = "How many prior bars are averaged to produce the volume baseline.")]
+        [Range(1, 500)]
+        public int VolumeLookbackBars
+        {
+            get => _volumeLookbackBars;
+            set { if (value >= 1) { _volumeLookbackBars = value; RecalculateValues(); } }
+        }
+
+        // ================================================================== //
+        //  Properties — Speed Filter                                          //
+        // ================================================================== //
+
+        /// <summary>
+        /// Buy or sell speed must be at least this multiple of its own lookback
+        /// average for the speed condition to pass.
+        /// </summary>
+        [Display(Name = "Min Speed Multiplier", GroupName = "Speed Filter", Order = 50,
+            Description = "Buy/sell speed must be ≥ this × the average speed of the last N bars.")]
+        [Range(0.1, 20.0)]
+        public decimal MinSpeedMultiplier
+        {
+            get => _minSpeedMultiplier;
+            set { _minSpeedMultiplier = value; RecalculateValues(); }
+        }
+
+        /// <summary>Number of prior bars used to build the reference average speed.</summary>
+        [Display(Name = "Speed Lookback Bars", GroupName = "Speed Filter", Order = 51,
+            Description = "How many prior bars are averaged to produce the speed baseline.")]
+        [Range(1, 500)]
+        public int SpeedLookbackBars
+        {
+            get => _speedLookbackBars;
+            set { if (value >= 1) { _speedLookbackBars = value; RecalculateValues(); } }
+        }
+
+        // ================================================================== //
+        //  Properties — Additional Filters                                    //
+        // ================================================================== //
+
+        /// <summary>
+        /// Minimum fraction of total bar volume that must be on one side for a bar
+        /// to qualify as a filter signal.  Set to 0 to disable.
+        /// Example: 0.6 means at least 60 % must be buy or sell to signal.
+        /// </summary>
+        [Display(Name = "Delta Threshold", GroupName = "Additional Filters", Order = 60,
+            Description = "Buy% or sell% of total volume must exceed this fraction. 0 = disabled.")]
+        [Range(0.0, 1.0)]
+        public decimal DeltaThreshold
+        {
+            get => _deltaThreshold;
+            set { _deltaThreshold = value; RecalculateValues(); }
+        }
+
+        /// <summary>
+        /// Bars whose computed speed falls below this value are treated as noise
+        /// and suppressed regardless of filter state.
+        /// </summary>
+        [Display(Name = "Min Bar Height", GroupName = "Additional Filters", Order = 61,
+            Description = "Bars with speed below this threshold are hidden (noise gate).")]
+        [Range(0, 10000)]
+        public int MinBarHeight
+        {
+            get => _minBarHeight;
+            set { _minBarHeight = value; RecalculateValues(); }
+        }
+
+        /// <summary>
+        /// When true, only bars that pass the active filter are rendered;
+        /// all others are suppressed entirely.
+        /// </summary>
+        [Display(Name = "Show Only Filtered", GroupName = "Additional Filters", Order = 62,
+            Description = "Hide non-signal bars. Only filtered (signal) bars are drawn.")]
+        public bool ShowOnlyFiltered
+        {
+            get => _showOnlyFiltered;
+            set { _showOnlyFiltered = value; RecalculateValues(); }
+        }
+
+        // ================================================================== //
+        //  Constructor                                                         //
+        // ================================================================== //
+
+        /// <summary>
+        /// Registers all five data series and places the indicator in its own panel.
         /// </summary>
         public SpeedOfTape()
         {
-            // Place this indicator in a new panel below the main chart.
             Panel = IndicatorDataProvider.NewPanel;
 
-            // Buy-side series — positive values, rendered green.
-            _buySpeedSeries = new ValueDataSeries("Buy Speed")
+            _buyNormalSeries = new ValueDataSeries("Buy")
             {
                 VisualType    = VisualMode.Histogram,
                 Color         = _buyColor,
                 ShowZeroValue = false,
             };
 
-            // Sell-side series — negative values, rendered purple.
-            _sellSpeedSeries = new ValueDataSeries("Sell Speed")
+            _sellNormalSeries = new ValueDataSeries("Sell")
             {
                 VisualType    = VisualMode.Histogram,
                 Color         = _sellColor,
                 ShowZeroValue = false,
             };
 
-            // DataSeries[0] is the primary (default) series created by the base class.
-            // Replace it with our buy series; then append the sell series.
-            DataSeries[0] = _buySpeedSeries;
-            DataSeries.Add(_sellSpeedSeries);
+            _buyFilteredSeries = new ValueDataSeries("Buy Signal")
+            {
+                VisualType    = VisualMode.Histogram,
+                Color         = _filteredBuyColor,
+                ShowZeroValue = false,
+            };
+
+            _sellFilteredSeries = new ValueDataSeries("Sell Signal")
+            {
+                VisualType    = VisualMode.Histogram,
+                Color         = _filteredSellColor,
+                ShowZeroValue = false,
+            };
+
+            // Thin line drawn at the rolling average total tape speed
+            _avgSpeedSeries = new ValueDataSeries("Avg Speed")
+            {
+                VisualType    = VisualMode.Line,
+                Color         = Colors.Gray,
+                ShowZeroValue = false,
+            };
+
+            DataSeries[0] = _buyNormalSeries;
+            DataSeries.Add(_sellNormalSeries);
+            DataSeries.Add(_buyFilteredSeries);
+            DataSeries.Add(_sellFilteredSeries);
+            DataSeries.Add(_avgSpeedSeries);
         }
 
-        // ------------------------------------------------------------------ //
-        //  Core calculation                                                    //
-        // ------------------------------------------------------------------ //
+        // ================================================================== //
+        //  OnCalculate                                                         //
+        // ================================================================== //
 
         /// <summary>
-        /// Called by the ATAS engine once per bar (and on real-time ticks for the
-        /// current bar).  Computes the net tape speed over the rolling window and
-        /// writes the result to the appropriate histogram series.
+        /// Called by ATAS for every bar (and on each real-time tick for the live bar).
+        /// Computes buy and sell tape speeds, applies the active filter, and routes
+        /// values to the appropriate colour series.
         /// </summary>
-        /// <param name="bar">
-        /// Zero-based index of the bar being (re)calculated.
-        /// </param>
-        /// <param name="value">
-        /// Close price of the bar; not used here — we read order-flow fields
-        /// directly from <see cref="GetCandle"/>.
-        /// </param>
+        /// <param name="bar">Zero-based bar index being (re)calculated.</param>
+        /// <param name="value">Close price — unused; we read order-flow fields directly.</param>
         protected override void OnCalculate(int bar, decimal value)
         {
-            // On the very first bar reset both series so stale data is flushed
-            // when the indicator is applied to a new chart or the period changes.
             if (bar == 0)
             {
-                _buySpeedSeries.Clear();
-                _sellSpeedSeries.Clear();
+                _buyNormalSeries.Clear();
+                _sellNormalSeries.Clear();
+                _buyFilteredSeries.Clear();
+                _sellFilteredSeries.Clear();
+                _avgSpeedSeries.Clear();
                 return;
             }
 
-            // Determine the start of the rolling window (clamped to bar 0).
-            int startBar = Math.Max(0, bar - _period + 1);
+            // ---- 1. Current bar speeds (both positive) ------------------- //
+            var (buySpeed, sellSpeed) = CalculateBarSpeed(bar);
+            decimal totalSpeed = buySpeed + sellSpeed;
 
-            decimal totalBuyVolume  = 0m;
-            decimal totalSellVolume = 0m;
-            double  totalSeconds    = 0d;
+            // Noise gate: treat bars below MinBarHeight as zero
+            decimal buyValue  = buySpeed  >= _minBarHeight ? buySpeed  : 0m;
+            decimal sellValue = sellSpeed >= _minBarHeight ? sellSpeed : 0m;
 
-            for (int i = startBar; i <= bar; i++)
+            // ---- 2. Filter pass / fail ------------------------------------ //
+            bool filterActive = _useAutoFilter || _useCustomFilters;
+            bool buyFiltered  = false;
+            bool sellFiltered = false;
+
+            if (filterActive)
             {
-                IndicatorCandle candle = GetCandle(i);
-                if (candle is null)
-                    continue;
+                if (_useAutoFilter)
+                {
+                    // Thresholds = mean + 1.5 × stdDev over last 50 bars
+                    var (buyThresh, sellThresh) = CalculateAutoThresholds(bar);
+                    buyFiltered  = buyValue  > 0m && buySpeed  >= buyThresh;
+                    sellFiltered = sellValue > 0m && sellSpeed >= sellThresh;
+                }
+                else // _useCustomFilters
+                {
+                    IndicatorCandle current = GetCandle(bar);
+                    decimal currentVol = current?.Volume ?? 0m;
 
-                // candle.Ask = volume traded at the ask (buyer-initiated / lift)
-                // candle.Bid = volume traded at the bid (seller-initiated / hit)
-                totalBuyVolume  += candle.Ask;
-                totalSellVolume += candle.Bid;
+                    decimal avgVol = CalculateAvgBarVolume(bar, _volumeLookbackBars);
+                    bool    volOk  = avgVol <= 0m || currentVol >= avgVol * _minVolumeMultiplier;
 
-                // Measure this bar's duration so we can normalise to per-second rate.
-                double barSeconds = (candle.LastTime - candle.Time).TotalSeconds;
-                if (barSeconds > 0d)
-                    totalSeconds += barSeconds;
+                    var (avgBuySpd, avgSellSpd) = CalculateAvgSpeeds(bar, _speedLookbackBars);
+                    bool buySpeedOk  = avgBuySpd  <= 0m || buySpeed  >= avgBuySpd  * _minSpeedMultiplier;
+                    bool sellSpeedOk = avgSellSpd <= 0m || sellSpeed >= avgSellSpd * _minSpeedMultiplier;
+
+                    buyFiltered  = buyValue  > 0m && volOk && buySpeedOk;
+                    sellFiltered = sellValue > 0m && volOk && sellSpeedOk;
+                }
+
+                // Delta threshold: one side must represent at least X% of total volume
+                if (_deltaThreshold > 0m && totalSpeed > 0m)
+                {
+                    if (buySpeed  / totalSpeed < _deltaThreshold) buyFiltered  = false;
+                    if (sellSpeed / totalSpeed < _deltaThreshold) sellFiltered = false;
+                }
             }
 
-            // Guard: tick charts or very first bars may have zero elapsed time;
-            // fall back to treating the whole window as 1 second to avoid division
-            // by zero while still returning a meaningful relative magnitude.
-            if (totalSeconds <= 0d)
-                totalSeconds = 1d;
-
-            decimal buySpeed  = totalBuyVolume  / (decimal)totalSeconds; // contracts/sec
-            decimal sellSpeed = totalSellVolume / (decimal)totalSeconds; // contracts/sec
-            decimal netSpeed  = buySpeed - sellSpeed;                    // signed delta
-
-            if (netSpeed >= 0m)
+            // ---- 3. Route values to the correct colour series ------------- //
+            if (!filterActive)
             {
-                // Buyers faster → positive green bar.
-                _buySpeedSeries[bar]  = netSpeed;
-                _sellSpeedSeries[bar] = 0m;
+                // No filtering — plain green / purple bars
+                _buyNormalSeries[bar]    = buyValue;
+                _sellNormalSeries[bar]   = sellValue;
+                _buyFilteredSeries[bar]  = 0m;
+                _sellFilteredSeries[bar] = 0m;
+            }
+            else if (_showOnlyFiltered)
+            {
+                // Only signal bars rendered; everything else suppressed
+                _buyNormalSeries[bar]    = 0m;
+                _sellNormalSeries[bar]   = 0m;
+                _buyFilteredSeries[bar]  = buyFiltered  ? buyValue  : 0m;
+                _sellFilteredSeries[bar] = sellFiltered ? sellValue : 0m;
             }
             else
             {
-                // Sellers faster → negative purple bar.
-                _buySpeedSeries[bar]  = 0m;
-                _sellSpeedSeries[bar] = netSpeed; // already negative
+                // All bars shown; signal bars drawn in highlight colour,
+                // non-signal bars remain in the base colour
+                _buyNormalSeries[bar]    = buyFiltered  ? 0m : buyValue;
+                _sellNormalSeries[bar]   = sellFiltered ? 0m : sellValue;
+                _buyFilteredSeries[bar]  = buyFiltered  ? buyValue  : 0m;
+                _sellFilteredSeries[bar] = sellFiltered ? sellValue : 0m;
             }
+
+            // ---- 4. Average-speed reference line -------------------------- //
+            _avgSpeedSeries[bar] = CalculateAvgTotalSpeed(bar, _period);
+        }
+
+        // ================================================================== //
+        //  Private helpers                                                     //
+        // ================================================================== //
+
+        /// <summary>
+        /// Computes buy and sell tape speed (contracts/second) for the <see cref="Period"/>
+        /// rolling window ending at <paramref name="bar"/>.
+        /// </summary>
+        private (decimal buySpeed, decimal sellSpeed) CalculateBarSpeed(int bar)
+        {
+            int     start        = Math.Max(0, bar - _period + 1);
+            decimal totalBuy     = 0m;
+            decimal totalSell    = 0m;
+            double  totalSeconds = 0d;
+
+            for (int i = start; i <= bar; i++)
+            {
+                IndicatorCandle c = GetCandle(i);
+                if (c is null) continue;
+
+                totalBuy  += c.Ask;
+                totalSell += c.Bid;
+
+                double secs = (c.LastTime - c.Time).TotalSeconds;
+                if (secs > 0d) totalSeconds += secs;
+            }
+
+            if (totalSeconds <= 0d) totalSeconds = 1d;
+            return (totalBuy / (decimal)totalSeconds, totalSell / (decimal)totalSeconds);
+        }
+
+        /// <summary>
+        /// Computes separate buy and sell thresholds as mean + 1.5 × std dev
+        /// calculated over the 50 bars immediately before <paramref name="bar"/>.
+        /// </summary>
+        private (decimal buyThreshold, decimal sellThreshold) CalculateAutoThresholds(int bar)
+        {
+            const int     historyBars = 50;
+            const decimal stdDevMul   = 1.5m;
+
+            int start = Math.Max(0, bar - historyBars);
+            var buyValues  = new List<decimal>(historyBars);
+            var sellValues = new List<decimal>(historyBars);
+
+            for (int i = start; i < bar; i++)
+            {
+                var (b, s) = CalculateBarSpeed(i);
+                buyValues.Add(b);
+                sellValues.Add(s);
+            }
+
+            return (
+                MeanPlusStdDev(buyValues,  stdDevMul),
+                MeanPlusStdDev(sellValues, stdDevMul)
+            );
+        }
+
+        /// <summary>
+        /// Returns mean + <paramref name="multiplier"/> × population standard deviation
+        /// for <paramref name="values"/>, or zero when fewer than two samples exist.
+        /// </summary>
+        private static decimal MeanPlusStdDev(List<decimal> values, decimal multiplier)
+        {
+            if (values.Count < 2) return 0m;
+
+            decimal mean = 0m;
+            foreach (decimal v in values) mean += v;
+            mean /= values.Count;
+
+            decimal variance = 0m;
+            foreach (decimal v in values) variance += (v - mean) * (v - mean);
+            variance /= values.Count;
+
+            return mean + multiplier * (decimal)Math.Sqrt((double)variance);
+        }
+
+        /// <summary>
+        /// Average single-bar total volume over the <paramref name="lookback"/> bars
+        /// immediately before <paramref name="bar"/>.
+        /// </summary>
+        private decimal CalculateAvgBarVolume(int bar, int lookback)
+        {
+            int     start = Math.Max(0, bar - lookback);
+            decimal total = 0m;
+            int     count = 0;
+
+            for (int i = start; i < bar; i++)
+            {
+                IndicatorCandle c = GetCandle(i);
+                if (c is null) continue;
+                total += c.Volume;
+                count++;
+            }
+
+            return count > 0 ? total / count : 0m;
+        }
+
+        /// <summary>
+        /// Average buy and sell tape speeds over the <paramref name="lookback"/> bars
+        /// immediately before <paramref name="bar"/>.
+        /// </summary>
+        private (decimal avgBuy, decimal avgSell) CalculateAvgSpeeds(int bar, int lookback)
+        {
+            int     start   = Math.Max(0, bar - lookback);
+            decimal sumBuy  = 0m;
+            decimal sumSell = 0m;
+            int     count   = 0;
+
+            for (int i = start; i < bar; i++)
+            {
+                var (b, s) = CalculateBarSpeed(i);
+                sumBuy  += b;
+                sumSell += s;
+                count++;
+            }
+
+            if (count == 0) return (0m, 0m);
+            return (sumBuy / count, sumSell / count);
+        }
+
+        /// <summary>
+        /// Rolling average of combined tape speed (buy + sell) over the last
+        /// <paramref name="lookback"/> bars, used for the reference line.
+        /// </summary>
+        private decimal CalculateAvgTotalSpeed(int bar, int lookback)
+        {
+            int     start = Math.Max(0, bar - lookback);
+            decimal sum   = 0m;
+            int     count = 0;
+
+            for (int i = start; i < bar; i++)
+            {
+                var (b, s) = CalculateBarSpeed(i);
+                sum += b + s;
+                count++;
+            }
+
+            return count > 0 ? sum / count : 0m;
         }
     }
 }
