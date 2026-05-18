@@ -20,60 +20,69 @@
     <Company>Custom</Company>
     <Product>SpeedOfTape</Product>
     <Version>1.0.0</Version>
+
+    <!--
+      Default ATAS installation directory.
+      Override on the command line if yours differs:
+        dotnet build -p:ATASPath="D:\ATAS Platform"
+    -->
+    <ATASPath Condition="'$(ATASPath)' == ''">C:\Program Files (x86)\ATAS Platform</ATASPath>
   </PropertyGroup>
 
   <!-- ================================================================= -->
   <!--  PRODUCTION BUILD — real ATAS SDK DLLs                            -->
   <!--                                                                   -->
-  <!--  Usage:                                                            -->
+  <!--  Run on your Windows machine (where ATAS is installed):           -->
   <!--    dotnet build SpeedOfTape.csproj -c Release                     -->
   <!--                                                                   -->
-  <!--  Before building, copy these DLLs from your ATAS installation     -->
-  <!--  into the  libs\  folder next to this .csproj:                    -->
-  <!--    • ATAS.Indicators.dll                                          -->
-  <!--    • OFT.Rendering.dll                                            -->
+  <!--  Override the path if your ATAS install differs:                  -->
+  <!--    dotnet build -c Release -p:ATASPath="D:\ATAS Platform"         -->
   <!--                                                                   -->
-  <!--  ATAS is usually installed at:                                    -->
-  <!--    C:\Program Files\ATAS Platform\bin\                            -->
-  <!--  (check Settings → About in ATAS for the exact path)             -->
+  <!--  DLLs are marked Private=false so they are NOT bundled into the   -->
+  <!--  output — ATAS supplies them at runtime from its own directory.   -->
   <!-- ================================================================= -->
   <ItemGroup Condition="'$(UseStubs)' != 'true'">
 
     <Reference Include="ATAS.Indicators">
-      <HintPath>libs\ATAS.Indicators.dll</HintPath>
-      <!-- Do NOT copy into the output — ATAS provides the real DLL at runtime -->
+      <HintPath>$(ATASPath)\ATAS.Indicators.dll</HintPath>
       <Private>false</Private>
     </Reference>
 
-    <Reference Include="OFT.Rendering">
-      <HintPath>libs\OFT.Rendering.dll</HintPath>
+    <Reference Include="ATAS.Indicators.Other">
+      <HintPath>$(ATASPath)\ATAS.Indicators.Other.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+
+    <Reference Include="ATAS.Indicators.Technical">
+      <HintPath>$(ATASPath)\ATAS.Indicators.Technical.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+
+    <Reference Include="ATAS.DataFeedsCore">
+      <HintPath>$(ATASPath)\ATAS.DataFeedsCore.dll</HintPath>
       <Private>false</Private>
     </Reference>
 
   </ItemGroup>
 
   <!-- ================================================================= -->
-  <!--  STUB BUILD — for local compilation without ATAS installed        -->
+  <!--  STUB BUILD — compile verification without ATAS installed          -->
   <!--                                                                   -->
-  <!--  Usage:                                                            -->
   <!--    dotnet build SpeedOfTape.csproj -c Release -p:UseStubs=true   -->
   <!--                                                                   -->
-  <!--  WARNING: The resulting DLL will NOT load inside ATAS because     -->
-  <!--  the stub assembly identity does not match the real SDK.          -->
-  <!--  Use this only to verify that the code compiles cleanly.         -->
+  <!--  WARNING: This DLL will NOT load in ATAS — stubs only.           -->
   <!-- ================================================================= -->
   <ItemGroup Condition="'$(UseStubs)' == 'true'">
     <ProjectReference Include="stubs\ATAS.Indicators.Stubs.csproj" />
   </ItemGroup>
 
   <!-- ================================================================= -->
-  <!--  Framework assemblies not auto-included by the SDK for net48     -->
-  <!--  All are present in the GAC on any Windows machine with .NET FX 4.8 -->
+  <!--  Standard .NET Framework 4.8 assemblies not auto-included by SDK  -->
   <!-- ================================================================= -->
   <ItemGroup>
-    <!-- System.ComponentModel.DataAnnotations — [Display], [Range], etc. -->
+    <!-- [Display], [Range] attributes -->
     <Reference Include="System.ComponentModel.DataAnnotations" />
-    <!-- WPF color types — System.Windows.Media.Color, Colors -->
+    <!-- System.Windows.Media.Color, Colors (WPF — in GAC on Windows with .NET FX 4.8) -->
     <Reference Include="WindowsBase" />
     <Reference Include="PresentationCore" />
   </ItemGroup>
