@@ -1,0 +1,78 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- ================================================================= -->
+  <!--  SpeedOfTape — ATAS Custom Indicator                               -->
+  <!--  Target: .NET Framework 4.8 (matches ATAS host process)           -->
+  <!-- ================================================================= -->
+
+  <PropertyGroup>
+    <AssemblyName>SpeedOfTape</AssemblyName>
+    <RootNamespace>SpeedOfTapeIndicator</RootNamespace>
+    <TargetFramework>net48</TargetFramework>
+    <OutputType>Library</OutputType>
+    <LangVersion>8.0</LangVersion>
+    <Nullable>enable</Nullable>
+    <Optimize>true</Optimize>
+    <!-- ATAS loads both x64 and x86 plugins — AnyCPU is the safest default -->
+    <PlatformTarget>AnyCPU</PlatformTarget>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <Description>Speed of Tape — ATAS order-flow histogram indicator</Description>
+    <Company>Custom</Company>
+    <Product>SpeedOfTape</Product>
+    <Version>1.0.0</Version>
+  </PropertyGroup>
+
+  <!-- ================================================================= -->
+  <!--  PRODUCTION BUILD — real ATAS SDK DLLs                            -->
+  <!--                                                                   -->
+  <!--  Usage:                                                            -->
+  <!--    dotnet build SpeedOfTape.csproj -c Release                     -->
+  <!--                                                                   -->
+  <!--  Before building, copy these DLLs from your ATAS installation     -->
+  <!--  into the  libs\  folder next to this .csproj:                    -->
+  <!--    • ATAS.Indicators.dll                                          -->
+  <!--    • OFT.Rendering.dll                                            -->
+  <!--                                                                   -->
+  <!--  ATAS is usually installed at:                                    -->
+  <!--    C:\Program Files\ATAS Platform\bin\                            -->
+  <!--  (check Settings → About in ATAS for the exact path)             -->
+  <!-- ================================================================= -->
+  <ItemGroup Condition="'$(UseStubs)' != 'true'">
+
+    <Reference Include="ATAS.Indicators">
+      <HintPath>libs\ATAS.Indicators.dll</HintPath>
+      <!-- Do NOT copy into the output — ATAS provides the real DLL at runtime -->
+      <Private>false</Private>
+    </Reference>
+
+    <Reference Include="OFT.Rendering">
+      <HintPath>libs\OFT.Rendering.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+
+  </ItemGroup>
+
+  <!-- ================================================================= -->
+  <!--  STUB BUILD — for local compilation without ATAS installed        -->
+  <!--                                                                   -->
+  <!--  Usage:                                                            -->
+  <!--    dotnet build SpeedOfTape.csproj -c Release -p:UseStubs=true   -->
+  <!--                                                                   -->
+  <!--  WARNING: The resulting DLL will NOT load inside ATAS because     -->
+  <!--  the stub assembly identity does not match the real SDK.          -->
+  <!--  Use this only to verify that the code compiles cleanly.         -->
+  <!-- ================================================================= -->
+  <ItemGroup Condition="'$(UseStubs)' == 'true'">
+    <ProjectReference Include="stubs\ATAS.Indicators.Stubs.csproj" />
+  </ItemGroup>
+
+  <!-- ================================================================= -->
+  <!--  WPF / Windows color types (System.Windows.Media.Color)           -->
+  <!--  Present in the GAC on any Windows machine with .NET FX 4.8      -->
+  <!-- ================================================================= -->
+  <ItemGroup>
+    <Reference Include="WindowsBase" />
+    <Reference Include="PresentationCore" />
+  </ItemGroup>
+
+</Project>

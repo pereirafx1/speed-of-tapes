@@ -1,0 +1,13 @@
+## .NET build artefacts
+bin/
+obj/
+*.user
+
+## Copied SDK DLLs — never commit proprietary ATAS binaries
+libs/
+
+## IDE
+.vs/
+*.suo
+*.idea/
+*.DS_Store
