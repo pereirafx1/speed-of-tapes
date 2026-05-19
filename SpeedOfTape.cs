@@ -180,9 +180,20 @@ namespace SpeedOfTapeIndicator
                 return;
             }
 
-            // Both values are positive — green for buy, purple for sell
-            _buySpeedSeries[bar]  = sumBuy  / count;
-            _sellSpeedSeries[bar] = sumSell / count;
+            // Show only the dominant side; the other series is zeroed out
+            decimal avgBuy  = sumBuy  / count;
+            decimal avgSell = sumSell / count;
+
+            if (avgBuy >= avgSell)
+            {
+                _buySpeedSeries[bar]  = avgBuy;
+                _sellSpeedSeries[bar] = 0m;
+            }
+            else
+            {
+                _buySpeedSeries[bar]  = 0m;
+                _sellSpeedSeries[bar] = avgSell;
+            }
         }
     }
 }
